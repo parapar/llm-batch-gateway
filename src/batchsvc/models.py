@@ -142,7 +142,7 @@ class FilePurpose(enum.StrEnum):
 class FileObject(Base):
     __tablename__ = "files"
 
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    id: Mapped[str] = mapped_column(String(48), primary_key=True, default=lambda: f"file_{_uuid()}")
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     purpose: Mapped[FilePurpose] = mapped_column(String(16))
     filename: Mapped[str] = mapped_column(String(256))
@@ -172,6 +172,7 @@ class Batch(Base):
     output_file_id: Mapped[str | None] = mapped_column(ForeignKey("files.id"), nullable=True)
     error_file_id: Mapped[str | None] = mapped_column(ForeignKey("files.id"), nullable=True)
     endpoint: Mapped[str] = mapped_column(String(64), default="/v1/chat/completions")
+    completion_window: Mapped[str] = mapped_column(String(16), default="24h")
     status: Mapped[BatchStatus] = mapped_column(String(16), default=BatchStatus.VALIDATING)
     reserved_tokens: Mapped[int] = mapped_column(Integer, default=0)
     request_total: Mapped[int] = mapped_column(Integer, default=0)
@@ -180,6 +181,7 @@ class Batch(Base):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     in_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finalizing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

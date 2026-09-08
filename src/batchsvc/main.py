@@ -9,7 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from batchsvc.config import Settings, load_settings
 from batchsvc.db import build_database
 from batchsvc.ledger import InsufficientBudgetError
-from batchsvc.routers import admin, misc
+from batchsvc.routers import admin, batches, files, misc
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -20,6 +20,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(admin.router)
     app.include_router(misc.router)
+    app.include_router(files.router)
+    app.include_router(batches.router)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request, exc: StarletteHTTPException):  # noqa: ANN001
