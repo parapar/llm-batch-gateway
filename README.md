@@ -5,11 +5,11 @@ the OpenAI Batch API. Built for a lab of slow inference machines (AMD
 Strix Halo) shared by students with per-student token budgets.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the full design and milestone plan.
-This README covers what's implemented so far (**M0 + M1 + M2 + M3**:
-project skeleton, accounting, the OpenAI Batch API surface, and the
-dispatcher that actually runs inference) and how to run it.
+This README covers what's implemented so far (**M0 through M4**: project
+skeleton, accounting, the OpenAI Batch API surface, the dispatcher that
+actually runs inference, and ETA estimation) and how to run it.
 
-## What's here (M0 + M1 + M2 + M3)
+## What's here (M0 through M4)
 
 - FastAPI app with SQLite (WAL mode) storage.
 - Full data model for users, API keys, budgets, ledger entries, files,
@@ -43,13 +43,25 @@ dispatcher that actually runs inference) and how to run it.
   real token usage) exactly the same way whether driven by the
   dispatcher or, as in some tests, called directly. A stuck `RUNNING`
   task from a previous crash is reset to `PENDING` on startup.
+- **ETA estimation** (`batchsvc/eta.py`): every batch status response
+  carries an `x_eta` block (`estimated_seconds_remaining`,
+  `estimated_completion_at`, `queue_position`, `confidence`). Built from
+  a rolling EWMA of real cluster throughput and expected (not
+  worst-case) output length, fed by every task the dispatcher actually
+  completes; before enough samples exist (or with no dispatcher
+  running) it falls back to conservative bootstrap constants and flags
+  `confidence: "low"`. `queue_position` approximates the dispatcher's
+  fair-share ordering as simple FIFO-by-batch-submission-time, which is
+  close enough for a rough estimate without replaying the exact
+  round-robin on every status request.
 - Admin CLI: `batchsvc-admin create-user|create-key|grant|list-users`.
 
-Not yet implemented: ETA estimation (M4) and the retention/cleanup job,
-expiry enforcement, and `/metrics` (M5). Everything else in the plan is
-live and exercised end to end (see `tests/test_dispatcher.py`, and it's
-been verified over real HTTP sockets against a stand-in llama-server,
-not just in-process).
+Not yet implemented: the M5 items -- result retention/cleanup job,
+batch expiry enforcement, and `/metrics`. Everything else in the plan is
+live and exercised end to end (see `tests/test_dispatcher.py` and
+`tests/test_eta.py`), and the core submit-through-dispatch flow has been
+verified over real HTTP sockets against a stand-in llama-server, not
+just in-process.
 
 ## Setup
 
@@ -124,7 +136,8 @@ curl -s -X POST localhost:8000/v1/batches -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{"input_file_id": "file_...", "endpoint": "/v1/chat/completions", "completion_window": "24h"}'
 
-# Poll status.
+# Poll status -- includes x_tokens (budget impact) and x_eta (rough
+# time remaining, once a dispatcher is configured and running).
 curl -s localhost:8000/v1/batches/batch_... -H "Authorization: Bearer sk-..."
 
 # Once status is "completed", download results the same way as any file.
@@ -157,7 +170,7 @@ with):
 ## Tests
 
 ```bash
-pytest -q       # 54 tests: ledger, admin API, auth, files/batches, lifecycle, dispatcher
+pytest -q       # 59 tests: ledger, admin API, auth, files/batches, lifecycle, dispatcher, ETA
 ruff check .
 ```
 
@@ -179,6 +192,7 @@ src/batchsvc/
   batch_ops.py    JSONL validation, batch submit/cancel, task completion + finalization
   llama_client.py thin async HTTP client for one llama-server node
   dispatcher.py   claims/load-balances/retries tasks across nodes; health checks; crash recovery
+  eta.py          rolling throughput EWMA + per-batch remaining-time estimate
   security.py     API key generation/hashing
   errors.py       OpenAI-shaped error envelope
   deps.py         FastAPI auth/DB dependencies

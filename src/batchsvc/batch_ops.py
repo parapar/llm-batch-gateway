@@ -5,13 +5,12 @@ Two things live here rather than in the routers:
 1. JSONL parsing/validation (parse_batch_input) and batch submission
    (create_batch) -- the M2 scope proper.
 2. Task completion/finalization (complete_task, fail_task, cancel_batch)
-   -- the sink end of the pipeline. There's no dispatcher yet (M3), so
-   nothing in this codebase calls complete_task/fail_task outside of
-   tests today, but writing them now means M3's dispatcher only has to
-   report per-task outcomes here rather than reinventing settlement and
-   finalization. Keeping this in one module also means there's exactly
-   one place that writes to Task/Batch rows outside of ledger.py's own
-   ownership of Budget rows.
+   -- the sink end of the pipeline. The M3 dispatcher (batchsvc.dispatcher)
+   calls complete_task/fail_task once per task it settles; a few tests
+   also call them directly (bypassing a real dispatcher) to exercise the
+   pipeline deterministically. Keeping this in one module means there's
+   exactly one place that writes to Task/Batch rows outside of ledger.py's
+   own ownership of Budget rows.
 
 Atomicity note: ledger.reserve/release/charge each commit the session
 themselves (see ledger.py). Every function below sets all the Batch/Task
@@ -31,7 +30,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from batchsvc import ledger, tokens
+from batchsvc import eta, ledger, tokens
 from batchsvc.blobs import write_blob
 from batchsvc.errors import ConflictError, InvalidRequestError, NotFoundError
 from batchsvc.models import (
@@ -220,6 +219,8 @@ def create_batch(
                 custom_id=p.custom_id,
                 request_body=p.body,
                 reserved_tokens=p.reserved_tokens,
+                prompt_tokens_estimate=p.prompt_tokens,
+                max_tokens=p.max_tokens,
                 status=TaskStatus.PENDING,
             )
         )
@@ -274,6 +275,7 @@ def complete_task(
     prompt_tokens: int,
     completion_tokens: int,
     blob_dir: Path,
+    eta_alpha: float = 0.3,
 ) -> Task:
     now_ts = _now()
     task.status = TaskStatus.COMPLETED
@@ -285,6 +287,10 @@ def complete_task(
     batch = db.get(Batch, task.batch_id)
     batch.request_completed += 1
     user = db.get(User, batch.user_id)
+
+    # Feeds the M4 ETA model's rolling throughput estimate. A no-op if this
+    # task was never actually dispatched (started_at unset) -- see eta.py.
+    eta.update_dispatch_stats(db, task=task, alpha=eta_alpha)
 
     ledger.charge(
         db,

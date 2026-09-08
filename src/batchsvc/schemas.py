@@ -112,6 +112,22 @@ class BatchTokenUsage(BaseModel):
     consumed: int
 
 
+class BatchEtaOut(BaseModel):
+    """Non-standard extension: a rough estimate of remaining time, based
+    on rolling cluster throughput and the (expected, not worst-case)
+    remaining work for this batch plus batches ahead of it in the queue.
+    See batchsvc/eta.py. `confidence` is "low" while there aren't yet
+    enough completed-task samples to trust the throughput estimate, and
+    "unavailable" (all other fields null) once the batch is no longer
+    in progress, or if there's no dispatcher/no healthy node to ever
+    finish it."""
+
+    estimated_seconds_remaining: float | None = None
+    estimated_completion_at: int | None = None
+    queue_position: int | None = None
+    confidence: str = "unavailable"
+
+
 class BatchOut(BaseModel):
     id: str
     object: str = "batch"
@@ -133,6 +149,7 @@ class BatchOut(BaseModel):
     request_counts: BatchRequestCounts
     metadata: dict | None = None
     x_tokens: BatchTokenUsage
+    x_eta: BatchEtaOut
 
 
 class BatchListOut(BaseModel):

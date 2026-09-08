@@ -245,6 +245,7 @@ class Dispatcher:
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     completion_tokens=int(usage.get("completion_tokens", 0)),
                     blob_dir=self.settings.blob_dir,
+                    eta_alpha=self.settings.eta_ewma_alpha,
                 )
             else:
                 batch_ops.fail_task(

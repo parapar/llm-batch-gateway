@@ -52,3 +52,21 @@ health_check_interval_seconds: 15.0
 # How long the dispatcher sleeps between dispatch attempts when there was
 # nothing to claim (it never sleeps while there's work and free capacity).
 dispatch_idle_poll_seconds: 1.0
+
+# --- ETA estimation (M4) ---
+
+# EWMA smoothing factor for both rolling-throughput stats below (higher =
+# more weight on the most recent task, adapts faster but noisier).
+eta_ewma_alpha: 0.3
+
+# Below this many completed-task samples, x_eta.confidence on a batch's
+# status response is reported "low" (the bootstrap values below are
+# still doing most of the work).
+eta_min_samples_for_confidence: 5
+
+# Used until enough real samples exist. Deliberately conservative
+# (slow) defaults matching Strix Halo boxes, not a fast GPU -- tune
+# these down once you have a feel for your actual hardware, or just let
+# the EWMA take over after a few dozen completed requests.
+eta_bootstrap_tokens_per_second: 5.0
+eta_bootstrap_completion_tokens: 200.0

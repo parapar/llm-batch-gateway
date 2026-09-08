@@ -38,6 +38,15 @@ class Settings:
     health_check_interval_seconds: float = 15.0
     dispatch_idle_poll_seconds: float = 1.0
 
+    # ETA estimation (M4) tunables.
+    eta_ewma_alpha: float = 0.3
+    eta_min_samples_for_confidence: int = 5
+    # Bootstrap values used until enough real samples exist -- deliberately
+    # conservative (slow) defaults matching the AMD Strix Halo boxes this
+    # was built for, not a fast GPU box.
+    eta_bootstrap_tokens_per_second: float = 5.0
+    eta_bootstrap_completion_tokens: float = 200.0
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path}"
@@ -83,4 +92,8 @@ def load_settings(path: Path | None = None) -> Settings:
         node_unhealthy_threshold=int(raw.get("node_unhealthy_threshold", 3)),
         health_check_interval_seconds=float(raw.get("health_check_interval_seconds", 15.0)),
         dispatch_idle_poll_seconds=float(raw.get("dispatch_idle_poll_seconds", 1.0)),
+        eta_ewma_alpha=float(raw.get("eta_ewma_alpha", 0.3)),
+        eta_min_samples_for_confidence=int(raw.get("eta_min_samples_for_confidence", 5)),
+        eta_bootstrap_tokens_per_second=float(raw.get("eta_bootstrap_tokens_per_second", 5.0)),
+        eta_bootstrap_completion_tokens=float(raw.get("eta_bootstrap_completion_tokens", 200.0)),
     )

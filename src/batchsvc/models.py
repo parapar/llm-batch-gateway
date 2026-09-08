@@ -207,6 +207,12 @@ class Task(Base):
     request_body: Mapped[dict] = mapped_column(JSON)
     status: Mapped[TaskStatus] = mapped_column(String(16), default=TaskStatus.PENDING, index=True)
     reserved_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Pre-submission worst-case estimate (batch_ops.parse_batch_input), split
+    # out from reserved_tokens (their sum) so the M4 ETA model can use
+    # *expected* rather than worst-case output length per pending task.
+    prompt_tokens_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    # Actual usage, filled in once the task completes.
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -232,4 +238,29 @@ class Node(Base):
     health: Mapped[NodeHealth] = mapped_column(String(16), default=NodeHealth.HEALTHY)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     tokens_per_second_ewma: Mapped[float | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class DispatchStat(Base):
+    """Single global row (id="global") tracking the rolling cluster
+    throughput used for M4's ETA estimates -- see eta.py. Deliberately
+    cluster-wide rather than per-node: all nodes in a deployment serve
+    the same model (docs/PLAN.md), so per-task throughput is treated as
+    one shared distribution rather than tracked separately per node.
+    """
+
+    __tablename__ = "dispatch_stats"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default=lambda: "global")
+    # EWMA of (weighted tokens) / (wall-clock seconds) for one task on one
+    # node's slot -- multiply by healthy concurrent slots for cluster
+    # throughput. "Weighted tokens" = prompt_tokens/10 + completion_tokens
+    # (eta.PROMPT_TOKEN_WEIGHT), since prefill is much cheaper per token
+    # than generation.
+    tokens_per_second_ewma: Mapped[float | None] = mapped_column(nullable=True)
+    # EWMA of completed tasks' actual completion_tokens, used as the
+    # "expected output length" for a pending task instead of its
+    # worst-case max_tokens.
+    avg_completion_tokens_ewma: Mapped[float | None] = mapped_column(nullable=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

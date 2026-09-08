@@ -11,13 +11,20 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from batchsvc import batch_ops
+from batchsvc import batch_ops, eta
 from batchsvc.blobs import read_blob
 from batchsvc.config import Settings
 from batchsvc.deps import get_current_user, get_db, get_settings
 from batchsvc.errors import InvalidRequestError
 from batchsvc.models import Batch, FilePurpose, LedgerEntry, LedgerEntryType, User
-from batchsvc.schemas import BatchCreate, BatchListOut, BatchOut, BatchRequestCounts, BatchTokenUsage
+from batchsvc.schemas import (
+    BatchCreate,
+    BatchEtaOut,
+    BatchListOut,
+    BatchOut,
+    BatchRequestCounts,
+    BatchTokenUsage,
+)
 
 router = APIRouter(tags=["batches"])
 
@@ -35,7 +42,8 @@ def _tokens_consumed(db: Session, batch_id: str) -> int:
     return int(total or 0)
 
 
-def _batch_out(db: Session, batch: Batch) -> BatchOut:
+def _batch_out(db: Session, settings: Settings, batch: Batch) -> BatchOut:
+    estimate = eta.estimate_batch_eta(db, settings, batch)
     return BatchOut(
         id=batch.id,
         endpoint=batch.endpoint,
@@ -57,6 +65,12 @@ def _batch_out(db: Session, batch: Batch) -> BatchOut:
         ),
         metadata=batch.metadata_json,
         x_tokens=BatchTokenUsage(reserved=batch.reserved_tokens, consumed=_tokens_consumed(db, batch.id)),
+        x_eta=BatchEtaOut(
+            estimated_seconds_remaining=estimate.estimated_seconds_remaining,
+            estimated_completion_at=_ts(estimate.estimated_completion_at),
+            queue_position=estimate.queue_position,
+            confidence=estimate.confidence,
+        ),
     )
 
 
@@ -95,20 +109,26 @@ def create_batch(
         metadata=payload.metadata,
         parsed_lines=parsed_lines,
     )
-    return _batch_out(db, batch)
+    return _batch_out(db, settings, batch)
 
 
 @router.get("/v1/batches/{batch_id}", response_model=BatchOut)
 def get_batch(
-    batch_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    batch_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> BatchOut:
     batch = batch_ops.get_owned_batch_or_404(db, user, batch_id)
-    return _batch_out(db, batch)
+    return _batch_out(db, settings, batch)
 
 
 @router.get("/v1/batches", response_model=BatchListOut)
 def list_batches(
-    limit: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    limit: int = 20,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> BatchListOut:
     limit = max(1, min(limit, 100))
     rows = (
@@ -118,13 +138,16 @@ def list_batches(
         .limit(limit)
         .all()
     )
-    return BatchListOut(data=[_batch_out(db, b) for b in rows])
+    return BatchListOut(data=[_batch_out(db, settings, b) for b in rows])
 
 
 @router.post("/v1/batches/{batch_id}/cancel", response_model=BatchOut)
 def cancel_batch(
-    batch_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    batch_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> BatchOut:
     batch = batch_ops.get_owned_batch_or_404(db, user, batch_id)
     batch = batch_ops.cancel_batch(db, user=user, batch=batch)
-    return _batch_out(db, batch)
+    return _batch_out(db, settings, batch)
