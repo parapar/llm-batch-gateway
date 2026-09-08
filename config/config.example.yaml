@@ -1,0 +1,32 @@
+# Copy to config.yaml (or set BATCHSVC_CONFIG=/path/to/file.yaml) and adjust.
+
+# SQLite database file (WAL mode). Directory is created if missing.
+database_path: "data/batchsvc.db"
+
+# Where uploaded input files and generated output/error files are stored.
+blob_dir: "data/blobs"
+
+# Admin bearer token for the /admin/* endpoints. Override via the
+# BATCHSVC_ADMIN_TOKEN environment variable in real deployments — do not
+# commit a real token to config.yaml.
+admin_token: "change-me-admin-token"
+
+# Default per-line max_tokens assumed for budget reservation when a batch
+# request line does not specify one. Keeps worst-case reservation bounded.
+default_max_tokens: 512
+
+# How long completed batch results are retained before the retention job
+# is allowed to purge them (days). Enforced by an M5 cleanup job, not yet
+# implemented in M0/M1.
+result_retention_days: 7
+
+# Inference nodes (llama-server instances), one model per deployment.
+# Populated in M3 when the dispatcher is implemented; harmless to leave
+# empty for now.
+nodes: []
+#  - name: halo-1
+#    base_url: "http://halo-1.local:8080"
+#    parallel_slots: 4
+#  - name: halo-2
+#    base_url: "http://halo-2.local:8080"
+#    parallel_slots: 4
