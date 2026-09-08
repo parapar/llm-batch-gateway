@@ -21,8 +21,9 @@ default_max_tokens: 512
 result_retention_days: 7
 
 # Inference nodes (llama-server instances), one model per deployment.
-# Populated in M3 when the dispatcher is implemented; harmless to leave
-# empty for now.
+# The dispatcher only starts (as a background task) when this is
+# non-empty -- leave it empty on a machine that's only serving the API
+# (e.g. most test/dev setups).
 nodes: []
 #  - name: halo-1
 #    base_url: "http://halo-1.local:8080"
@@ -30,3 +31,24 @@ nodes: []
 #  - name: halo-2
 #    base_url: "http://halo-2.local:8080"
 #    parallel_slots: 4
+
+# --- Dispatcher (M3) ---
+
+# Attempts per task (including the first) before it's given up on and
+# recorded as a failed request in the batch's error file.
+task_max_attempts: 3
+
+# Per-request timeout talking to a node's /v1/chat/completions.
+task_request_timeout_seconds: 300.0
+
+# Consecutive /health failures before a node is taken out of rotation
+# (its in-flight tasks fail over to other healthy nodes via retry; new
+# tasks stop being routed to it until it recovers).
+node_unhealthy_threshold: 3
+
+# How often the dispatcher polls node /health.
+health_check_interval_seconds: 15.0
+
+# How long the dispatcher sleeps between dispatch attempts when there was
+# nothing to claim (it never sleeps while there's work and free capacity).
+dispatch_idle_poll_seconds: 1.0

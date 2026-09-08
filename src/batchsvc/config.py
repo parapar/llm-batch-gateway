@@ -31,6 +31,13 @@ class Settings:
     result_retention_days: int = 7
     nodes: list[NodeConfig] = field(default_factory=list)
 
+    # Dispatcher (M3) tunables.
+    task_max_attempts: int = 3
+    task_request_timeout_seconds: float = 300.0
+    node_unhealthy_threshold: int = 3
+    health_check_interval_seconds: float = 15.0
+    dispatch_idle_poll_seconds: float = 1.0
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path}"
@@ -71,4 +78,9 @@ def load_settings(path: Path | None = None) -> Settings:
         default_max_tokens=int(raw.get("default_max_tokens", 512)),
         result_retention_days=int(raw.get("result_retention_days", 7)),
         nodes=nodes,
+        task_max_attempts=int(raw.get("task_max_attempts", 3)),
+        task_request_timeout_seconds=float(raw.get("task_request_timeout_seconds", 300.0)),
+        node_unhealthy_threshold=int(raw.get("node_unhealthy_threshold", 3)),
+        health_check_interval_seconds=float(raw.get("health_check_interval_seconds", 15.0)),
+        dispatch_idle_poll_seconds=float(raw.get("dispatch_idle_poll_seconds", 1.0)),
     )

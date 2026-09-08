@@ -5,14 +5,15 @@ the OpenAI Batch API. Built for a lab of slow inference machines (AMD
 Strix Halo) shared by students with per-student token budgets.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the full design and milestone plan.
-This README covers what's implemented so far (**M0 + M1 + M2**: project
-skeleton, accounting, and the OpenAI Batch API surface) and how to run it.
+This README covers what's implemented so far (**M0 + M1 + M2 + M3**:
+project skeleton, accounting, the OpenAI Batch API surface, and the
+dispatcher that actually runs inference) and how to run it.
 
-## What's here (M0 + M1 + M2)
+## What's here (M0 + M1 + M2 + M3)
 
 - FastAPI app with SQLite (WAL mode) storage.
 - Full data model for users, API keys, budgets, ledger entries, files,
-  batches, and tasks (nodes table is schema-stable but unused until M3).
+  batches, tasks, and nodes.
 - **Token budget accounting** (`batchsvc/ledger.py`): grant / reserve /
   release / charge / adjust, all append-only via `ledger_entries`, with
   the materialized `budgets` row always reconstructable from history
@@ -29,17 +30,26 @@ skeleton, accounting, and the OpenAI Batch API surface) and how to run it.
   prompt + each line's `max_tokens`) atomically against the student's
   budget before anything is created; malformed input files or an
   unsupported endpoint are rejected synchronously with no partial state
-  left behind. See `batchsvc/batch_ops.py` for the JSONL validation and
-  the completion/finalization pipeline (which M3's dispatcher will drive
-  per task; nothing calls it yet outside of tests).
+  left behind.
+- **Dispatcher** (`batchsvc/dispatcher.py`): a background asyncio loop
+  (started automatically when `nodes` is non-empty in config) that
+  claims pending tasks, fair-share round-robins them across users, load
+  balances across healthy nodes by in-flight count (never trusting a
+  node's own `/slots`), retries transient failures with backoff, and
+  ejects a node from rotation after consecutive `/health` failures.
+  Every task it completes or fails settles through the same
+  `batch_ops.complete_task`/`fail_task` pipeline M2 already built, so
+  batches finalize (write `output.jsonl`/`error.jsonl`, charge/release
+  real token usage) exactly the same way whether driven by the
+  dispatcher or, as in some tests, called directly. A stuck `RUNNING`
+  task from a previous crash is reset to `PENDING` on startup.
 - Admin CLI: `batchsvc-admin create-user|create-key|grant|list-users`.
 
-Not yet implemented: the dispatcher and node pool that actually run
-inference (M3), and ETA estimation (M4). Until M3 exists, submitted
-batches sit at `in_progress` with `request_counts.completed == 0`
-forever — there's nothing yet that drives a task to completion outside
-of `batch_ops.complete_task`/`fail_task`, which the test suite calls
-directly to exercise the full pipeline.
+Not yet implemented: ETA estimation (M4) and the retention/cleanup job,
+expiry enforcement, and `/metrics` (M5). Everything else in the plan is
+live and exercised end to end (see `tests/test_dispatcher.py`, and it's
+been verified over real HTTP sockets against a stand-in llama-server,
+not just in-process).
 
 ## Setup
 
@@ -57,6 +67,13 @@ cp config/config.example.yaml config/config.yaml
 # edit config.yaml, or just override at runtime:
 export BATCHSVC_ADMIN_TOKEN="pick-a-real-secret"
 ```
+
+To actually run inference, add your llama-server node(s) under `nodes:`
+in `config.yaml` (see the comments there for the dispatcher's other
+tunables -- retry attempts, health check interval, etc.). Leave `nodes`
+empty to run API-only (submitted batches just sit at `in_progress`
+forever with nothing to drive them — useful for exercising the API
+surface without a GPU/node available).
 
 ## Running
 
@@ -140,9 +157,14 @@ with):
 ## Tests
 
 ```bash
-pytest -q       # 46 tests: ledger invariants, admin API, auth, files/batches, full lifecycle
+pytest -q       # 54 tests: ledger, admin API, auth, files/batches, lifecycle, dispatcher
 ruff check .
 ```
+
+Dispatcher tests run against a fake llama-server (`tests/fake_llama_node.py`,
+an in-process FastAPI app reached via `httpx.ASGITransport` -- no real
+sockets, no real model) so they're fast and deterministic while still
+exercising the real HTTP client and JSON wire format.
 
 ## Layout
 
@@ -155,6 +177,8 @@ src/batchsvc/
   tokens.py       heuristic token estimator for upfront reservation
   blobs.py        on-disk storage for file/batch JSONL blobs
   batch_ops.py    JSONL validation, batch submit/cancel, task completion + finalization
+  llama_client.py thin async HTTP client for one llama-server node
+  dispatcher.py   claims/load-balances/retries tasks across nodes; health checks; crash recovery
   security.py     API key generation/hashing
   errors.py       OpenAI-shaped error envelope
   deps.py         FastAPI auth/DB dependencies
@@ -164,9 +188,9 @@ src/batchsvc/
     misc.py       /healthz, /v1/budget
     files.py      /v1/files (upload, metadata, content)
     batches.py    /v1/batches (submit, status, list, cancel)
-  main.py         app factory
+  main.py         app factory (starts the dispatcher as a lifespan-managed background task)
   cli.py          batchsvc-admin CLI
-tests/            pytest suite (fixtures in conftest.py)
+tests/            pytest suite (fixtures in conftest.py; fake_llama_node.py for dispatcher tests)
 config/           config.example.yaml
 docs/PLAN.md      full design + milestone plan
 ```
