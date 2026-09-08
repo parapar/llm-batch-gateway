@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<header class="bar"><h1>Batch inference &mdash; sign in</h1></header>
+<div class="panel" style="max-width: 420px;">
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <p style="color: var(--muted); font-size: 14px; margin-top: 0;">
+    Use your usual university username and password.
+  </p>
+  <form method="post" action="/portal/login">
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username"
+             autocapitalize="none" autocorrect="off" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+{% endblock %}

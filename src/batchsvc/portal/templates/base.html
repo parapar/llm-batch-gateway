@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Batch Inference{% endblock %}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --border: #dfe3e8;
+      --text: #1b1f24;
+      --muted: #5c6773;
+      --accent: #2f6fdb;
+      --ok: #1f7a4d;
+      --warn: #a35b00;
+      --bad: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171a; --panel: #1c2024; --border: #2c3238;
+        --text: #e7eaee; --muted: #9aa5b1; --accent: #6ea8ff;
+        --ok: #4cc38a; --warn: #e0a34a; --bad: #ef6a63;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 940px; margin: 0 auto; padding: 24px 20px 64px; }
+    header.bar {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap; margin-bottom: 24px;
+    }
+    header.bar h1 { font-size: 20px; margin: 0; }
+    header.bar .who { color: var(--muted); font-size: 14px; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px; margin-bottom: 20px;
+    }
+    .panel h2 { font-size: 15px; margin: 0 0 14px; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+    .tile { border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+    .tile .label { color: var(--muted); font-size: 13px; }
+    .tile .value { font-size: 22px; font-variant-numeric: tabular-nums; margin-top: 4px; }
+    .bar-track { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 16px; }
+    .bar-fill { height: 100%; background: var(--accent); }
+    .bar-note { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; font-size: 13px; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .scroll { overflow-x: auto; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .empty { color: var(--muted); font-style: italic; }
+    button {
+      font: inherit; background: var(--accent); color: #fff; border: 0;
+      border-radius: 7px; padding: 9px 15px; cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    input[type=text], input[type=password] {
+      font: inherit; width: 100%; padding: 9px 11px; border-radius: 7px;
+      border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    }
+    label { display: block; font-size: 14px; margin: 0 0 6px; }
+    .field { margin-bottom: 14px; }
+    .error { border-left: 3px solid var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent);
+      padding: 11px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 14px; }
+    .notice { border-left: 3px solid var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent);
+      padding: 14px; border-radius: 6px; margin-bottom: 16px; }
+    .keybox { display: block; margin-top: 10px; padding: 11px; background: var(--bg);
+      border: 1px dashed var(--border); border-radius: 6px; word-break: break-all; }
+    .status { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
+    .status.completed { color: var(--ok); }
+    .status.in_progress, .status.validating, .status.finalizing { color: var(--accent); }
+    .status.failed, .status.expired { color: var(--bad); }
+    .status.cancelled { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">{% block content %}{% endblock %}</div>
+</body>
+</html>

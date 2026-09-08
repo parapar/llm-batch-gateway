@@ -5,10 +5,11 @@ the OpenAI Batch API. Built for a lab of slow inference machines (AMD
 Strix Halo) shared by students with per-student token budgets.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the full design and milestone plan.
-The plan (**M0 through M5**) is now fully implemented. This README
-covers what's here and how to run it; see also
-[`docs/QUICKSTART.md`](docs/QUICKSTART.md) (for students) and
-[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) (Docker/systemd).
+The plan (**M0 through M5**) is fully implemented, plus a **student web
+portal** with LDAP login on top. This README covers what's here and how
+to run it; see also [`docs/QUICKSTART.md`](docs/QUICKSTART.md) (for
+students) and [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+(Docker/systemd).
 
 ## What's here
 
@@ -78,6 +79,15 @@ covers what's here and how to run it; see also
   Prometheus text format -- request counts, batch/task counts by
   status, per-node health/in-flight/capacity, and the cluster
   throughput EWMA feeding the ETA model.
+- **Student portal** (`/portal`): a small server-rendered web app where
+  students sign in with their **LDAP** directory credentials and see
+  their token budget, what each job cost them, and their API key.
+  Supports both direct-bind and service-account search-then-bind, an
+  optional required-group gate, and auto-provisioning (first successful
+  login creates the account with a configurable default grant). Keys
+  stay hash-only in the database: the portal shows the prefix, and
+  "generate a new key" reveals the new one exactly once while revoking
+  the old. See `batchsvc/ldap_auth.py` and `batchsvc/portal/`.
 - Admin CLI: `batchsvc-admin create-user|create-key|grant|list-users`.
 - **Deployment**: a `Dockerfile` and a documented systemd unit
   ([`deploy/batchsvc.service`](deploy/batchsvc.service)) -- see
@@ -118,6 +128,45 @@ tunables -- retry attempts, health check interval, etc.). Leave `nodes`
 empty to run API-only (submitted batches just sit at `in_progress`
 forever with nothing to drive them — useful for exercising the API
 surface without a GPU/node available).
+
+## Student portal (LDAP)
+
+To let students sign in and see their own budget, fill in the `portal:`
+and `ldap:` sections of `config.yaml` (every option is commented in
+`config/config.example.yaml`) and set a session secret:
+
+```bash
+export BATCHSVC_PORTAL_SECRET="$(openssl rand -hex 32)"
+# only for bind_mode: search
+export BATCHSVC_LDAP_SERVICE_PASSWORD="..."
+```
+
+The portal is then at `/portal`. Both bind modes are supported:
+
+```yaml
+ldap:
+  enabled: true
+  server_uri: "ldaps://ldap.internal.example.edu:636"
+  use_ssl: true
+  bind_mode: "direct"                                        # or "search"
+  user_dn_template: "uid={username},ou=people,dc=example,dc=edu"
+  required_group_dn: "cn=llm-course,ou=groups,dc=example,dc=edu"   # optional
+```
+
+Notes worth knowing before you point this at a real directory:
+
+- **Serve it over HTTPS.** `cookie_secure: true` (the default) means
+  session cookies are only sent over TLS, so the portal simply won't
+  keep you logged in over plain `http://`. Students type real
+  university passwords into this form.
+- Certificates are **verified** for `use_ssl`/`start_tls`; set
+  `ca_certs_file` if your directory uses an internal CA.
+- With `auto_provision: true` (the default) any student who can bind
+  gets an account and `default_grant_tokens` on first login. Use
+  `required_group_dn` to scope that to enrolled students, or turn
+  auto-provisioning off and pre-create accounts with `batchsvc-admin`.
+- The portal never learns or stores a student's directory password: it
+  is only ever used for a bind against your server.
 
 ## Running
 
@@ -243,6 +292,12 @@ src/batchsvc/
     files.py      /v1/files (upload, metadata, content)
     batches.py    /v1/batches (submit, status, list, cancel)
     metrics.py    /metrics (Prometheus text format, admin-token protected)
+  ldap_auth.py    LDAP bind/search + group check for the student portal
+  portal/
+    routes.py     /portal (login, dashboard, API key rotation)
+    service.py    provisioning, dashboard figures, key rotation
+    session.py    signed-cookie sessions + CSRF tokens
+    templates/    server-rendered HTML (no build step)
   main.py         app factory (dispatcher + retention job as lifespan-managed background tasks)
   cli.py          batchsvc-admin CLI
 tests/            pytest suite (fixtures in conftest.py; fake_llama_node.py for dispatcher tests)
@@ -255,6 +310,6 @@ deploy/
 Dockerfile        container build
 docs/
   PLAN.md         full design + milestone plan
-  QUICKSTART.md   student-facing guide (submit a batch, check status, download results)
+  QUICKSTART.md   student-facing guide (portal, submit a batch, check status, download results)
   DEPLOYMENT.md   Docker / systemd deployment guide
 ```

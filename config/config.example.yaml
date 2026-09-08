@@ -70,3 +70,76 @@ eta_min_samples_for_confidence: 5
 # the EWMA take over after a few dozen completed requests.
 eta_bootstrap_tokens_per_second: 5.0
 eta_bootstrap_completion_tokens: 200.0
+
+# --- Student portal (M6) ---
+#
+# A small web UI at /portal where students sign in with their directory
+# credentials and see their budget, spending, and API key.
+
+portal:
+  enabled: true
+
+  # Signs session cookies. MUST be set to a long random value
+  # (`openssl rand -hex 32`) -- prefer the BATCHSVC_PORTAL_SECRET env var
+  # over putting it here. Left blank, the portal serves a "not enabled"
+  # page rather than signing sessions with a guessable placeholder.
+  session_secret: ""
+
+  session_lifetime_minutes: 480
+
+  # Sends session cookies only over HTTPS. Set false ONLY for local
+  # http:// development -- leaving it false behind a real deployment
+  # exposes session cookies to anyone on the network path.
+  cookie_secure: true
+
+  # Create an account on a student's first successful directory login,
+  # with this many tokens. Set auto_provision false to require that you
+  # pre-create accounts with `batchsvc-admin create-user <username>`.
+  auto_provision: true
+  default_grant_tokens: 100000
+
+  # Failed+successful login attempts allowed per client IP per minute,
+  # so the portal can't be used to brute-force directory passwords.
+  login_attempts_per_minute: 10
+
+# LDAP directory the portal authenticates against. Omit this section
+# entirely (or set enabled: false) to run without a portal.
+ldap:
+  enabled: false
+  server_uri: "ldap://ldap.internal.example.edu:389"
+
+  # "direct": bind straight as the student, DN built from the template
+  #           below. Simplest, no service account needed.
+  # "search": bind as service_account_dn, find the student with
+  #           search_filter under search_base, then rebind as the DN
+  #           found. Use when DNs aren't derivable from the username.
+  bind_mode: "direct"
+
+  # bind_mode: direct
+  user_dn_template: "uid={username},ou=people,dc=example,dc=edu"
+
+  # bind_mode: search
+  service_account_dn: "cn=svc-batchsvc,dc=example,dc=edu"
+  # Prefer BATCHSVC_LDAP_SERVICE_PASSWORD over putting this in the file.
+  service_account_password: null
+  search_base: "ou=people,dc=example,dc=edu"
+  # For Active Directory this is usually "(sAMAccountName={username})".
+  search_filter: "(uid={username})"
+
+  # Transport. use_ssl = ldaps:// on 636; start_tls = upgrade a plain
+  # connection. Certificates are verified, so point ca_certs_file at your
+  # internal CA if the directory uses a private one.
+  use_ssl: false
+  start_tls: true
+  ca_certs_file: null
+  timeout_seconds: 10
+
+  # Attributes read off the student's entry.
+  attr_display_name: "cn"
+  attr_email: "mail"
+  attr_member_of: "memberOf"
+
+  # Restrict access to members of one group (checked via memberOf, then
+  # by searching the group itself for directories that don't populate
+  # it). Leave null to admit anyone who can bind.
+  required_group_dn: null

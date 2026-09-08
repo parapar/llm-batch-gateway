@@ -59,6 +59,30 @@ Point Prometheus at `GET /metrics` with the admin token as a bearer
 credential if you want the operational gauges/counters (see
 `batchsvc/routers/metrics.py`); it's the same auth as `/admin/*`.
 
+## Student portal (LDAP)
+
+If you're running the portal, two extra things matter at deploy time:
+
+1. **Terminate TLS in front of it.** Session cookies default to
+   `Secure`, so the portal won't work over plain HTTP -- which is the
+   right default, because students submit real directory passwords to
+   it. Put it behind nginx/Caddy/whatever you already run, or set
+   `use_ssl` on the app itself.
+2. **Keep secrets out of `config.yaml`.** Set `BATCHSVC_PORTAL_SECRET`
+   (`openssl rand -hex 32`) and, for `bind_mode: search`,
+   `BATCHSVC_LDAP_SERVICE_PASSWORD` as environment variables --
+   `EnvironmentFile=` in the systemd unit, or `-e` / a secret mount for
+   Docker.
+
+Rotating `BATCHSVC_PORTAL_SECRET` invalidates every active session
+(everyone is signed out), which is also how you'd revoke sessions in
+bulk if you ever need to -- there's no server-side session store to
+clear.
+
+The service reaches your directory over the internal network, so
+whatever runs it needs a route to the LDAP host and, if you use an
+internal CA, its certificate at `ca_certs_file`.
+
 ## Upgrading
 
 This project has no migration tooling (no Alembic) -- schema changes

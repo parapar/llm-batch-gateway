@@ -8,16 +8,36 @@ Python SDK works against it without modification.
 
 ## 1. Get an API key
 
-Ask your instructor for:
+If your instructor has set up the **web portal**, that's the easiest
+route: go to the portal URL they gave you (something like
+`https://batchsvc.class.example.edu/portal`), sign in with your usual
+university username and password, and click **Generate an API key**.
+
+The key is shown **once**, on that page, right after you generate it.
+Copy it somewhere safe immediately -- the server only keeps a hash of
+it, so it genuinely cannot be shown again. If you lose it, generate
+another one (which replaces the old one, so anything still using the old
+key stops working).
+
+The portal also shows, at a glance:
+- how many tokens you have left, how many you've used, and how many are
+  currently held for jobs still running;
+- each recent job, its status, and what it actually cost you;
+- where your allowance came from.
+
+If there's no portal at your site, ask your instructor for:
+
 - The server's base URL (e.g. `http://batchsvc.class.example.edu:8000`)
-- Your API key (looks like `sk-...`) -- it's shown to your instructor
-  only once when they create it, so if you lose it, ask for a new one
-  rather than trying to recover the old one.
+- Your API key (looks like `sk-...`) -- it's shown to them only once
+  when they create it, so if you lose it, ask for a new one rather than
+  trying to recover the old one.
 
 Keep your key secret -- anyone with it can submit jobs against your
 token budget. Don't commit it to a public repo or notebook you share.
 
 ## 2. Check your budget
+
+The portal shows this on its front page. From the command line:
 
 ```bash
 curl -s $BASE_URL/v1/budget -H "Authorization: Bearer $API_KEY"

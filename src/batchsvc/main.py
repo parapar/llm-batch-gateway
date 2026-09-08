@@ -15,8 +15,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from batchsvc.config import Settings, load_settings
 from batchsvc.db import build_database
 from batchsvc.dispatcher import Dispatcher
+from batchsvc.ldap_auth import LdapAuthenticator
 from batchsvc.ledger import InsufficientBudgetError
 from batchsvc.logging_setup import configure_logging
+from batchsvc.portal import routes as portal_routes
+from batchsvc.portal.session import SessionCodec
 from batchsvc.retention import RetentionJob
 from batchsvc.routers import admin, batches, files, metrics, misc
 from batchsvc.routers.metrics import HTTP_REQUESTS_TOTAL
@@ -61,6 +64,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = db
     app.state.dispatcher = dispatcher
+    app.state.ldap = LdapAuthenticator(settings.ldap) if settings.ldap else None
+    # A blank secret leaves this None, and the portal routes then serve a
+    # clear "not enabled" page -- better than signing session cookies with
+    # a placeholder nobody remembered to change.
+    app.state.portal_sessions = (
+        SessionCodec(
+            settings.portal.session_secret,
+            lifetime_minutes=settings.portal.session_lifetime_minutes,
+        )
+        if settings.portal.enabled and settings.portal.session_secret
+        else None
+    )
+    app.state.portal_login_limiter = portal_routes.LoginRateLimiter(
+        settings.portal.login_attempts_per_minute
+    )
 
     @app.middleware("http")
     async def log_and_count_requests(request: Request, call_next):  # noqa: ANN001
@@ -88,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(files.router)
     app.include_router(batches.router)
     app.include_router(metrics.router)
+    app.include_router(portal_routes.router)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request, exc: StarletteHTTPException):  # noqa: ANN001
