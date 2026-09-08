@@ -58,6 +58,20 @@ def _install_pragmas(engine: Engine) -> None:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA foreign_keys=ON")
+        # SQLite's default busy_timeout is 0: a writer that can't
+        # immediately acquire the write lock fails instantly with
+        # "database is locked" rather than waiting. WAL allows concurrent
+        # readers, but writers (admin API calls, budget grants, batch
+        # submission, the dispatcher settling tasks) still serialize --
+        # under real concurrent load that surfaces as sporadic 500s
+        # without this (found via scripts/load_test.py). 20s comfortably
+        # covers a queue of writers backing up under a burst without
+        # masking a genuinely stuck one; this can be generous because
+        # every recurring background write (dispatcher, retention job)
+        # runs via asyncio.to_thread rather than directly on the event
+        # loop, so a long wait here costs one worker thread, never stalls
+        # the whole server the way it would if it blocked the loop.
+        cursor.execute("PRAGMA busy_timeout=20000")
         cursor.close()
 
 

@@ -1,0 +1,40 @@
+# systemd unit for running the batch inference service directly on a
+# host (no container). Install:
+#
+#   sudo useradd --system --create-home --home-dir /opt/batchsvc batchsvc
+#   sudo -u batchsvc git clone <repo> /opt/batchsvc/app
+#   cd /opt/batchsvc/app && sudo -u batchsvc uv venv && sudo -u batchsvc uv pip install -e .
+#   sudo -u batchsvc cp config/config.example.yaml /opt/batchsvc/app/config/config.yaml
+#   sudo -u batchsvc $EDITOR /opt/batchsvc/app/config/config.yaml   # set admin_token, nodes, etc.
+#   sudo cp deploy/batchsvc.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now batchsvc
+#
+# Logs: journalctl -u batchsvc -f  (JSON lines, per logging_setup.py)
+
+[Unit]
+Description=Batch inference gateway (llama.cpp Batch API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=batchsvc
+Group=batchsvc
+WorkingDirectory=/opt/batchsvc/app
+Environment=BATCHSVC_CONFIG=/opt/batchsvc/app/config/config.yaml
+# Prefer this over putting a real token in config.yaml on disk:
+# EnvironmentFile=/opt/batchsvc/app/config/batchsvc.env   # BATCHSVC_ADMIN_TOKEN=...
+ExecStart=/opt/batchsvc/app/.venv/bin/uvicorn batchsvc.main:create_app --factory --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Basic hardening -- data/blobs live under WorkingDirectory, nothing
+# else needs to be writable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/batchsvc/app/data /opt/batchsvc/app/config
+
+[Install]
+WantedBy=multi-user.target

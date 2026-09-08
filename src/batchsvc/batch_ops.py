@@ -234,33 +234,57 @@ def create_batch(
     return batch
 
 
-# --- Cancellation. ---
+# --- Cancellation / expiry. Both stop a batch early and release whatever
+# of its reservation is still outstanding -- the only difference is who
+# triggered it and which terminal status/timestamp lands on the batch. ---
+
+
+def _terminate_batch(
+    db: Session, *, user: User, batch: Batch, terminal_status: BatchStatus, note: str
+) -> Batch:
+    now_ts = _now()
+    tasks_to_stop = (
+        db.query(Task)
+        .filter(Task.batch_id == batch.id, Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
+        .all()
+    )
+    release_amount = sum(t.reserved_tokens for t in tasks_to_stop)
+    for t in tasks_to_stop:
+        t.status = TaskStatus.CANCELLED
+        t.finished_at = now_ts
+
+    batch.status = terminal_status
+    if terminal_status == BatchStatus.CANCELLED:
+        batch.cancelled_at = now_ts
+    elif terminal_status == BatchStatus.EXPIRED:
+        batch.expired_at = now_ts
+
+    if release_amount > 0:
+        ledger.release(db, user, release_amount, batch_id=batch.id, note=note)
+    else:
+        db.commit()
+    db.refresh(batch)
+    return batch
 
 
 def cancel_batch(db: Session, *, user: User, batch: Batch) -> Batch:
     if batch.status not in _CANCELLABLE_STATUSES:
         raise ConflictError(f"Batch '{batch.id}' cannot be cancelled from status '{batch.status}'.")
-
-    now_ts = _now()
-    tasks_to_cancel = (
-        db.query(Task)
-        .filter(Task.batch_id == batch.id, Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
-        .all()
+    return _terminate_batch(
+        db, user=user, batch=batch, terminal_status=BatchStatus.CANCELLED, note="batch cancelled"
     )
-    release_amount = sum(t.reserved_tokens for t in tasks_to_cancel)
-    for t in tasks_to_cancel:
-        t.status = TaskStatus.CANCELLED
-        t.finished_at = now_ts
 
-    batch.status = BatchStatus.CANCELLED
-    batch.cancelled_at = now_ts
 
-    if release_amount > 0:
-        ledger.release(db, user, release_amount, batch_id=batch.id, note="batch cancelled")
-    else:
-        db.commit()
-    db.refresh(batch)
-    return batch
+def expire_batch(db: Session, *, user: User, batch: Batch) -> Batch:
+    """Same effect as cancel_batch, triggered by the retention job
+    (retention.py) once a batch's completion_window has passed rather
+    than by the student. Callers are expected to have already checked
+    batch.expires_at -- this doesn't re-check it."""
+    if batch.status not in _CANCELLABLE_STATUSES:
+        raise ConflictError(f"Batch '{batch.id}' cannot expire from status '{batch.status}'.")
+    return _terminate_batch(
+        db, user=user, batch=batch, terminal_status=BatchStatus.EXPIRED, note="batch expired"
+    )
 
 
 # --- Task completion sink (called by the M3 dispatcher; exercised

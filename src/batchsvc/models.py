@@ -187,6 +187,13 @@ class Batch(Base):
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set by the M5 retention job (retention.py) once this batch's result
+    # files have been deleted past result_retention_days. output_file_id/
+    # error_file_id are nulled out at the same time -- GET /v1/files/{id}
+    # on a purged file 404s naturally since the FileObject row is deleted
+    # too, not because of this flag; it exists for observability/audit
+    # (so a purged batch's own record explains why its files are gone).
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TaskStatus(enum.StrEnum):

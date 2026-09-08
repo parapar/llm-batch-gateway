@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -15,33 +16,44 @@ from batchsvc.config import Settings, load_settings
 from batchsvc.db import build_database
 from batchsvc.dispatcher import Dispatcher
 from batchsvc.ledger import InsufficientBudgetError
-from batchsvc.routers import admin, batches, files, misc
+from batchsvc.logging_setup import configure_logging
+from batchsvc.retention import RetentionJob
+from batchsvc.routers import admin, batches, files, metrics, misc
+from batchsvc.routers.metrics import HTTP_REQUESTS_TOTAL
 
 logger = logging.getLogger("batchsvc.main")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
+    configure_logging(json_output=settings.log_json)
     db = build_database(settings)
     # The dispatcher only actually runs (as a background task, below) when
     # nodes are configured -- an API-only deployment, or most test/dev
     # setups, has nothing for it to do and shouldn't pay for a polling loop.
     dispatcher = Dispatcher(db, settings) if settings.nodes else None
+    # Unlike the dispatcher, expiry/cleanup make sense even with zero nodes
+    # configured, so this always runs.
+    retention_job = RetentionJob(db, settings)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        task: asyncio.Task | None = None
+        dispatcher_task: asyncio.Task | None = None
         if dispatcher is not None:
             dispatcher.startup()
-            task = asyncio.create_task(dispatcher.run_forever())
-            logger.info("dispatcher started with %d configured node(s)", len(settings.nodes))
+            dispatcher_task = asyncio.create_task(dispatcher.run_forever())
+            logger.info("dispatcher started", extra={"node_count": len(settings.nodes)})
+        retention_task = asyncio.create_task(retention_job.run_forever())
         try:
             yield
         finally:
-            if task is not None:
-                task.cancel()
+            retention_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await retention_task
+            if dispatcher_task is not None:
+                dispatcher_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
-                    await task
+                    await dispatcher_task
             if dispatcher is not None:
                 await dispatcher.aclose()
 
@@ -50,10 +62,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db = db
     app.state.dispatcher = dispatcher
 
+    @app.middleware("http")
+    async def log_and_count_requests(request: Request, call_next):  # noqa: ANN001
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        route = request.scope.get("route")
+        path_template = route.path if route is not None else request.url.path
+        HTTP_REQUESTS_TOTAL.labels(
+            method=request.method, path=path_template, status=response.status_code
+        ).inc()
+        logger.info(
+            "request",
+            extra={
+                "http_method": request.method,
+                "http_path": path_template,
+                "http_status": response.status_code,
+                "duration_ms": round(duration_ms, 2),
+            },
+        )
+        return response
+
     app.include_router(admin.router)
     app.include_router(misc.router)
     app.include_router(files.router)
     app.include_router(batches.router)
+    app.include_router(metrics.router)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request, exc: StarletteHTTPException):  # noqa: ANN001

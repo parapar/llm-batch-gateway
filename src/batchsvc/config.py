@@ -47,6 +47,14 @@ class Settings:
     eta_bootstrap_tokens_per_second: float = 5.0
     eta_bootstrap_completion_tokens: float = 200.0
 
+    # Retention job (M5) tunables.
+    retention_check_interval_seconds: float = 3600.0
+
+    # Logging (M5). JSON lines by default (easy to ship to a log
+    # aggregator); set false for human-readable console output during
+    # local development.
+    log_json: bool = True
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path}"
@@ -96,4 +104,6 @@ def load_settings(path: Path | None = None) -> Settings:
         eta_min_samples_for_confidence=int(raw.get("eta_min_samples_for_confidence", 5)),
         eta_bootstrap_tokens_per_second=float(raw.get("eta_bootstrap_tokens_per_second", 5.0)),
         eta_bootstrap_completion_tokens=float(raw.get("eta_bootstrap_completion_tokens", 200.0)),
+        retention_check_interval_seconds=float(raw.get("retention_check_interval_seconds", 3600.0)),
+        log_json=bool(raw.get("log_json", True)),
     )

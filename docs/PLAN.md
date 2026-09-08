@@ -143,14 +143,38 @@ estimate flagged low-confidence during the first runs.
 
 ## Milestones
 
-| # | Deliverable |
-|---|---|
-| **M0** | Repo skeleton: uv/pyproject, FastAPI app, YAML config, SQLite WAL + models, ruff, pytest, stub llama node for tests |
-| **M1** | Users, API keys, budgets, ledger, admin CLI + admin API; accounting invariant tests |
-| **M2** | `/v1/files` + `/v1/batches` submit/status/list/cancel/results, JSONL validation, budget reservation, OpenAI error envelope |
-| **M3** | Node pool, health, dispatcher loop, fair-share claiming, retries, usage charging, batch finalization, crash recovery |
-| **M4** | Throughput stats + ETA fields on the status endpoint |
-| **M5** | Expiry/limits, structured logging, `/metrics`, student quickstart docs, systemd + Docker, end-to-end load test against stub nodes |
+| # | Deliverable | Status |
+|---|---|---|
+| **M0** | Repo skeleton: uv/pyproject, FastAPI app, YAML config, SQLite WAL + models, ruff, pytest, stub llama node for tests | done |
+| **M1** | Users, API keys, budgets, ledger, admin CLI + admin API; accounting invariant tests | done |
+| **M2** | `/v1/files` + `/v1/batches` submit/status/list/cancel/results, JSONL validation, budget reservation, OpenAI error envelope | done |
+| **M3** | Node pool, health, dispatcher loop, fair-share claiming, retries, usage charging, batch finalization, crash recovery | done |
+| **M4** | Throughput stats + ETA fields on the status endpoint | done |
+| **M5** | Expiry/limits, structured logging, `/metrics`, student quickstart docs, systemd + Docker, end-to-end load test against stub nodes | done |
+
+All five milestones are implemented; see the README for what's where.
+`scripts/load_test.py` (the M5 end-to-end load test) earned its keep
+immediately: running it with 10 concurrent students against a live
+dispatcher surfaced two related, real bugs, both now fixed:
+
+1. No `PRAGMA busy_timeout` was set, so a writer that lost SQLite's
+   single-writer lock race failed instantly with "database is locked"
+   instead of waiting -- fixed with `busy_timeout=20000` in `db.py`.
+2. The dispatcher's and retention job's recurring background writes ran
+   as synchronous SQLAlchemy calls directly inside `async def`
+   functions on the main event loop. Under contention, a call that
+   blocked waiting on SQLite's write lock -- or on `ledger.py`'s
+   `threading.Lock`, held by an unrelated HTTP request's threadpool
+   thread -- would stall that same event loop, and with it every other
+   request the process was serving. Fixed by moving every such write
+   (dispatcher task-claiming and task-settlement, health-check writes,
+   the retention job's whole pass) onto a worker thread via
+   `asyncio.to_thread`, which is also what made raising `busy_timeout`
+   to a generous value safe in the first place: a long wait there now
+   costs one worker thread, never the whole server.
+
+Confirmed fixed by rerunning the same load test scenario clean before
+and after.
 
 ## Working assumptions (flag if wrong)
 

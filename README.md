@@ -5,13 +5,21 @@ the OpenAI Batch API. Built for a lab of slow inference machines (AMD
 Strix Halo) shared by students with per-student token budgets.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the full design and milestone plan.
-This README covers what's implemented so far (**M0 through M4**: project
-skeleton, accounting, the OpenAI Batch API surface, the dispatcher that
-actually runs inference, and ETA estimation) and how to run it.
+The plan (**M0 through M5**) is now fully implemented. This README
+covers what's here and how to run it; see also
+[`docs/QUICKSTART.md`](docs/QUICKSTART.md) (for students) and
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) (Docker/systemd).
 
-## What's here (M0 through M4)
+## What's here
 
-- FastAPI app with SQLite (WAL mode) storage.
+- FastAPI app with SQLite (WAL mode, `busy_timeout=20000` so concurrent
+  writers queue for the lock instead of failing outright) storage. Every
+  recurring background write (dispatcher, retention job) runs via
+  `asyncio.to_thread` rather than directly on the event loop, so a
+  writer waiting on that lock -- or on `ledger.py`'s own
+  `threading.Lock` -- costs one worker thread, not the whole server.
+  Both issues were found by `scripts/load_test.py` under real concurrent
+  load; see `docs/PLAN.md` for the detail.
 - Full data model for users, API keys, budgets, ledger entries, files,
   batches, tasks, and nodes.
 - **Token budget accounting** (`batchsvc/ledger.py`): grant / reserve /
@@ -54,13 +62,37 @@ actually runs inference, and ETA estimation) and how to run it.
   fair-share ordering as simple FIFO-by-batch-submission-time, which is
   close enough for a rough estimate without replaying the exact
   round-robin on every status request.
+- **Retention job** (`batchsvc/retention.py`): runs unconditionally
+  (unlike the dispatcher, it doesn't need nodes configured) as a
+  lifespan-managed background loop. Expires batches that outlive their
+  `completion_window` (releasing whatever budget was still reserved,
+  same effect as a student cancelling), and deletes output/error files
+  -- from disk and the DB -- once a finished batch is older than
+  `result_retention_days`. Both passes are idempotent and safe to
+  re-run.
+- **Structured logging** (`batchsvc/logging_setup.py`): JSON lines to
+  stdout by default, one object per record; a request-logging
+  middleware logs every HTTP call (method, route template, status,
+  duration).
+- **`GET /metrics`** (admin-token protected, like `/admin/*`):
+  Prometheus text format -- request counts, batch/task counts by
+  status, per-node health/in-flight/capacity, and the cluster
+  throughput EWMA feeding the ETA model.
 - Admin CLI: `batchsvc-admin create-user|create-key|grant|list-users`.
+- **Deployment**: a `Dockerfile` and a documented systemd unit
+  ([`deploy/batchsvc.service`](deploy/batchsvc.service)) -- see
+  [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+- **Load test** ([`scripts/load_test.py`](scripts/load_test.py)): spins
+  up real stub llama-server node(s) and a real batchsvc server as
+  subprocesses, then floods it with concurrent students end to end
+  (submit → poll → download) and reports throughput/latency. Not part
+  of the pytest suite (it's slow by design); run it manually.
 
-Not yet implemented: the M5 items -- result retention/cleanup job,
-batch expiry enforcement, and `/metrics`. Everything else in the plan is
-live and exercised end to end (see `tests/test_dispatcher.py` and
-`tests/test_eta.py`), and the core submit-through-dispatch flow has been
-verified over real HTTP sockets against a stand-in llama-server, not
+Everything in the plan is live and exercised end to end -- see
+`tests/test_dispatcher.py`, `tests/test_eta.py`, `tests/test_retention.py`
+and `tests/test_metrics.py` -- and the core submit-through-dispatch flow
+has additionally been verified over real HTTP sockets against a
+stand-in llama-server (both ad hoc and via `scripts/load_test.py`), not
 just in-process.
 
 ## Setup
@@ -170,14 +202,20 @@ with):
 ## Tests
 
 ```bash
-pytest -q       # 59 tests: ledger, admin API, auth, files/batches, lifecycle, dispatcher, ETA
+pytest -q       # ledger, admin API, auth, files/batches, lifecycle, dispatcher, ETA, retention, metrics
 ruff check .
 ```
 
 Dispatcher tests run against a fake llama-server (`tests/fake_llama_node.py`,
 an in-process FastAPI app reached via `httpx.ASGITransport` -- no real
 sockets, no real model) so they're fast and deterministic while still
-exercising the real HTTP client and JSON wire format.
+exercising the real HTTP client and JSON wire format. For a slower,
+real-sockets end-to-end check (including real subprocess servers and
+realistic latency), see `scripts/load_test.py`:
+
+```bash
+python scripts/load_test.py --students 10 --lines-per-batch 10
+```
 
 ## Layout
 
@@ -193,6 +231,8 @@ src/batchsvc/
   llama_client.py thin async HTTP client for one llama-server node
   dispatcher.py   claims/load-balances/retries tasks across nodes; health checks; crash recovery
   eta.py          rolling throughput EWMA + per-batch remaining-time estimate
+  retention.py    batch expiry + result-file purging (background job)
+  logging_setup.py  structured (JSON) logging configuration
   security.py     API key generation/hashing
   errors.py       OpenAI-shaped error envelope
   deps.py         FastAPI auth/DB dependencies
@@ -202,9 +242,19 @@ src/batchsvc/
     misc.py       /healthz, /v1/budget
     files.py      /v1/files (upload, metadata, content)
     batches.py    /v1/batches (submit, status, list, cancel)
-  main.py         app factory (starts the dispatcher as a lifespan-managed background task)
+    metrics.py    /metrics (Prometheus text format, admin-token protected)
+  main.py         app factory (dispatcher + retention job as lifespan-managed background tasks)
   cli.py          batchsvc-admin CLI
 tests/            pytest suite (fixtures in conftest.py; fake_llama_node.py for dispatcher tests)
+scripts/
+  stub_llama_node.py  standalone stub node for load testing (real subprocess, real latency)
+  load_test.py    end-to-end load test orchestrator (not part of pytest -- run manually)
 config/           config.example.yaml
-docs/PLAN.md      full design + milestone plan
+deploy/
+  batchsvc.service  systemd unit (install steps in its own comments)
+Dockerfile        container build
+docs/
+  PLAN.md         full design + milestone plan
+  QUICKSTART.md   student-facing guide (submit a batch, check status, download results)
+  DEPLOYMENT.md   Docker / systemd deployment guide
 ```

@@ -155,12 +155,21 @@ class Dispatcher:
 
     async def health_check_all(self) -> None:
         with self.db.session_scope() as session:
-            nodes = (
-                session.query(Node).filter(Node.health != NodeHealth.DISABLED).all()
-            )
-            for node in nodes:
-                client = self._client_for(node.base_url)
-                ok = await client.health()
+            nodes = session.query(Node).filter(Node.health != NodeHealth.DISABLED).all()
+            node_urls = [(n.name, n.base_url) for n in nodes]
+
+        # The HTTP health checks are genuinely async (correctly non-blocking
+        # on this event loop); only the DB write that follows needs the
+        # to_thread treatment -- see _execute_task's comment on why.
+        results = [(name, await self._client_for(base_url).health()) for name, base_url in node_urls]
+        await asyncio.to_thread(self._apply_health_results, results)
+
+    def _apply_health_results(self, results: list[tuple[str, bool]]) -> None:
+        with self.db.session_scope() as session:
+            for name, ok in results:
+                node = session.get(Node, name)
+                if node is None:
+                    continue
                 if ok:
                     node.consecutive_failures = 0
                     node.health = NodeHealth.HEALTHY
@@ -177,20 +186,39 @@ class Dispatcher:
         is free capacity across healthy nodes, dispatches them all
         concurrently, and returns once every one of them has settled
         (completed or failed -- including retries). Returns how many
-        tasks were claimed this pass (0 means nothing to do right now)."""
+        tasks were claimed this pass (0 means nothing to do right now).
+
+        Claiming is pure sync DB work (no async calls involved), so the
+        whole thing runs via asyncio.to_thread -- see _execute_task's
+        comment on why a blocking DB write must not run directly on this
+        event loop. run_forever() awaits each dispatch_once() fully
+        before starting the next, so there's no risk of two claim passes
+        for this dispatcher overlapping and racing on self._in_flight.
+        """
+        assignments = await asyncio.to_thread(self._claim_and_assign)
+        if not assignments:
+            return 0
+
+        for _task_id, node_name, _base_url in assignments:
+            self._in_flight[node_name] = self._in_flight.get(node_name, 0) + 1
+
+        await asyncio.gather(*(self._execute_task(*a) for a in assignments))
+        return len(assignments)
+
+    def _claim_and_assign(self) -> list[tuple[str, str, str]]:
         with self.db.session_scope() as session:
             healthy_nodes = session.query(Node).filter(Node.health == NodeHealth.HEALTHY).all()
             if not healthy_nodes:
-                return 0
+                return []
 
             capacity = {n.name: n.parallel_slots - self._in_flight.get(n.name, 0) for n in healthy_nodes}
             total_capacity = sum(c for c in capacity.values() if c > 0)
             if total_capacity <= 0:
-                return 0
+                return []
 
             claimed = _claim_tasks(session, total_capacity)
             if not claimed:
-                return 0
+                return []
 
             assignments: list[tuple[str, str, str]] = []  # (task_id, node_name, base_url)
             local_capacity = dict(capacity)
@@ -207,12 +235,7 @@ class Dispatcher:
                 task.attempts += 1
                 assignments.append((task.id, node_name, node_by_name[node_name].base_url))
             session.commit()
-
-        for _task_id, node_name, _base_url in assignments:
-            self._in_flight[node_name] = self._in_flight.get(node_name, 0) + 1
-
-        await asyncio.gather(*(self._execute_task(*a) for a in assignments))
-        return len(assignments)
+            return assignments
 
     async def _execute_task(self, task_id: str, node_name: str, base_url: str) -> None:
         with self.db.session_scope() as session:
@@ -234,6 +257,18 @@ class Dispatcher:
 
         self._in_flight[node_name] = max(0, self._in_flight.get(node_name, 0) - 1)
 
+        # Settlement goes through ledger.py, which serializes budget
+        # mutations with a plain threading.Lock (correct for sync HTTP
+        # route handlers, which Starlette runs in its threadpool). Calling
+        # that directly from this coroutine would block *this* event
+        # loop -- stalling every other request this process is serving,
+        # including unrelated status polls -- for as long as some HTTP
+        # request's thread holds the lock. asyncio.to_thread runs the
+        # blocking work on a worker thread instead, so a lock wait here
+        # costs only this one task, not the whole server.
+        await asyncio.to_thread(self._settle_task, task_id, result, last_error, max_attempts)
+
+    def _settle_task(self, task_id: str, result: dict | None, last_error: str, max_attempts: int) -> None:
         with self.db.session_scope() as session:
             task = session.get(Task, task_id)
             if result is not None:
@@ -254,6 +289,12 @@ class Dispatcher:
                     error=f"failed after {max_attempts} attempt(s): {last_error}",
                     blob_dir=self.settings.blob_dir,
                 )
+
+    def in_flight_snapshot(self) -> dict[str, int]:
+        """Current in-flight task count per node -- for /metrics (routers/
+        metrics.py); a copy, since the live dict is mutated on this
+        instance's own event loop between dispatch_once() calls."""
+        return dict(self._in_flight)
 
     # --- Background loop for production use (main.py's lifespan). ---
 
